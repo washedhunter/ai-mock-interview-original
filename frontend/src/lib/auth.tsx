@@ -10,6 +10,8 @@ type AuthState = {
   user: User | null;
   meta: Meta | null;
   loading: boolean;
+  /** Set when the API can't be reached (not when the visitor is simply logged out). */
+  apiDown: string | null;
   setUser: (u: User | null) => void;
   logout: () => Promise<void>;
 };
@@ -20,16 +22,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [loading, setLoading] = useState(true);
+  const [apiDown, setApiDown] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
+    const down = "Can't reach the interview server right now. Please try again in a minute.";
     api<User>("/auth/me")
       .then((u) => alive && setUser(u))
-      .catch(() => alive && setUser(null))
+      .catch((e) => {
+        if (!alive) return;
+        setUser(null);
+        if (!(e instanceof ApiError && e.status === 401)) setApiDown(down);
+      })
       .finally(() => alive && setLoading(false));
     api<Meta>("/meta")
       .then((m) => alive && setMeta(m))
-      .catch(() => undefined);
+      .catch(() => alive && setApiDown(down));
     return () => {
       alive = false;
     };
@@ -41,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, meta, loading, setUser, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, meta, loading, apiDown, setUser, logout }}>{children}</AuthContext.Provider>
   );
 }
 
@@ -53,12 +61,12 @@ export function useAuth(): AuthState {
 
 /** Redirects to /login when the visitor isn't signed in. Returns the user once known. */
 export function useRequireUser(): User | null {
-  const { user, loading } = useAuth();
+  const { user, loading, apiDown } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   useEffect(() => {
-    if (!loading && !user) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
-  }, [loading, user, router, pathname]);
+    if (!loading && !user && !apiDown) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+  }, [loading, user, apiDown, router, pathname]);
   return user;
 }
 

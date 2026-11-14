@@ -34,13 +34,26 @@ async def lifespan(app: FastAPI):
     yield
 
 
+_docs = get_settings().enable_api_docs
 app = FastAPI(
     title="AI Mock Interview API",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/api/docs",
-    openapi_url="/api/openapi.json",
+    docs_url="/api/docs" if _docs else None,
+    redoc_url=None,
+    openapi_url="/api/openapi.json" if _docs else None,
 )
+
+
+@app.middleware("http")
+async def _limit_body_size(request: Request, call_next):
+    """Refuse oversized bodies from Content-Length before Starlette spools them to disk."""
+    length = request.headers.get("content-length")
+    limit = get_settings().max_audio_bytes + 64 * 1024  # room for the multipart envelope
+    if length and length.isdigit() and int(length) > limit:
+        mb = get_settings().max_audio_bytes // (1024 * 1024)
+        return JSONResponse({"detail": f"Recording is larger than {mb} MB"}, status_code=413)
+    return await call_next(request)
 
 
 @app.exception_handler(AIError)

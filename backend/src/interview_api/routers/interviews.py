@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..ai import get_ai, get_transcriber
 from ..ai.base import AIError, InterviewAI, QuestionContext, ScoredItem, Transcriber
+from ..ai.transcribe import probe_duration
 from ..auth import current_user
 from ..clarity import compute_clarity
 from ..config import get_settings
@@ -58,6 +59,36 @@ def _own_interview(db: Session, user: User, interview_id: uuid.UUID) -> Intervie
     if iv is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview not found")
     return iv
+
+
+def _release(db: Session) -> None:
+    """End the read transaction so the pooled connection isn't held during slow AI calls.
+    (expire_on_commit=False keeps the loaded objects usable.)"""
+    db.commit()
+
+
+def _lock_interview(db: Session, user: User, interview_id: uuid.UUID) -> Interview:
+    """Re-load the interview with a row lock for the write phase. Serialises concurrent answers
+    to the same interview and answer-vs-complete races."""
+    iv = db.execute(
+        select(Interview)
+        .where(Interview.id == interview_id, Interview.user_id == user.id)
+        .with_for_update()
+        .options(selectinload(Interview.questions).selectinload(Question.answer))
+        # The session still holds the objects loaded before the AI calls; overwrite them with
+        # the current rows instead of trusting the stale copies.
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if iv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Interview not found")
+    return iv
+
+
+def _ai_budget(calls: int = 1) -> None:
+    """Global cap across all users on paid/quota'd AI calls (Gemini and transcription)."""
+    limit = get_settings().rate_ai_calls_per_hour
+    for _ in range(calls):
+        limiter.check("ai:global", limit, 3600)
 
 
 def _question_out(q: Question, reveal: bool) -> QuestionOut:
@@ -129,6 +160,8 @@ def create_interview(
             .limit(20)
         ).scalars()
     )
+    _release(db)
+    _ai_budget()
     generated = ai.generate_questions(body.role, body.level, n, avoid)
 
     iv = Interview(user_id=user.id, role=body.role, level=body.level, ai_model=ai.model_name)
@@ -208,6 +241,15 @@ def answer_question(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"Unsupported audio type: {ctype or 'unknown'}"
         )
     limiter.check(f"answers:{user.id}", s.rate_answers_per_hour, 3600)
+    ctx = QuestionContext(
+        role=iv.role,
+        level=iv.level,
+        kind=question.kind,
+        skill=question.skill,
+        question=question.text,
+        guidance=question.guidance,
+    )
+    _release(db)  # don't hold a DB connection while transcribing and scoring
 
     # Raw audio lives only in a temp file and is deleted as soon as it is transcribed,
     # unless KEEP_AUDIO=true.
@@ -218,11 +260,19 @@ def answer_question(
         size = _save_upload(audio, tmp, s.max_audio_bytes)
         if size == 0:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "The recording is empty")
+        # Check the length before spending CPU / transcription quota on it.
+        seconds = probe_duration(tmp)
+        if seconds is not None and seconds > s.max_answer_seconds + 30:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                f"Answers can be at most {s.max_answer_seconds // 60} minutes long",
+            )
+        _ai_budget(2)  # transcription + scoring
         transcript = transcriber.transcribe(tmp)
         if s.keep_audio:
             kept_dir = Path(s.audio_dir) / str(user.id)
             kept_dir.mkdir(parents=True, exist_ok=True)
-            kept_path = kept_dir / f"{question.id}{tmp.suffix}"
+            kept_path = kept_dir / f"{question_id}{tmp.suffix}"
             shutil.move(tmp, kept_path)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -244,14 +294,6 @@ def answer_question(
         ideal_low=s.ideal_wpm_low,
         ideal_high=s.ideal_wpm_high,
     )
-    ctx = QuestionContext(
-        role=iv.role,
-        level=iv.level,
-        kind=question.kind,
-        skill=question.skill,
-        question=question.text,
-        guidance=question.guidance,
-    )
     assessment = ai.assess_answer(ctx, transcript.text)
     scores = combine(
         assessment,
@@ -260,6 +302,14 @@ def answer_question(
         clarity_computed_weight=s.clarity_computed_weight,
     )
 
+    # Write phase, under a row lock on the interview.
+    iv = _lock_interview(db, user, interview_id)
+    if iv.status != "in_progress":
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This interview was finished while your answer was scored"
+        )
+    question = next(q for q in iv.questions if q.id == question_id)
     if question.answer is not None:  # re-answering replaces the earlier attempt
         db.delete(question.answer)
         db.flush()
@@ -327,7 +377,23 @@ def complete_interview(
         )
         for q in answered
     ]
+    answered_ids = {q.id for q in answered}
+    _release(db)
+    _ai_budget()
     summary = ai.summarize(iv.role, iv.level, items)
+
+    iv = _lock_interview(db, user, interview_id)
+    if iv.status == "completed":  # a parallel request finished it first
+        db.rollback()
+        return interview_out(_own_interview(db, user, interview_id))
+    answered = [q for q in iv.questions if q.answer is not None]
+    if {q.id for q in answered} != answered_ids:
+        # An answer landed while the debrief was being written; ask the client to retry so the
+        # summary and the aggregates cover the same answers.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "An answer was still being saved. Please finish again."
+        )
     skipped = len(iv.questions) - len(answered)
 
     iv.overall_score = mean([q.answer.overall_score for q in answered])

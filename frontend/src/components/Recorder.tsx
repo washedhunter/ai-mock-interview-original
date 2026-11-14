@@ -51,9 +51,11 @@ type Props = {
   /** Upload the recording. Throw ApiError to show its message (the recording is kept for retry). */
   onSubmit: (audio: Blob, filename: string) => Promise<void>;
   submitLabel?: string;
+  /** Called with true while recording or uploading, so the page can block conflicting actions. */
+  onBusyChange?: (busy: boolean) => void;
 };
 
-export default function Recorder({ maxSeconds, onSubmit, submitLabel = "Submit answer" }: Props) {
+export default function Recorder({ maxSeconds, onSubmit, submitLabel = "Submit answer", onBusyChange }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [problem, setProblem] = useState<Problem>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -67,6 +69,17 @@ export default function Recorder({ maxSeconds, onSubmit, submitLabel = "Submit a
   const timerRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
+  const mountedRef = useRef(true);
+
+  const onBusyRef = useRef(onBusyChange);
+  useEffect(() => {
+    onBusyRef.current = onBusyChange;
+  }, [onBusyChange]);
+
+  const busy = phase === "requesting" || phase === "recording" || phase === "uploading";
+  useEffect(() => {
+    onBusyRef.current?.(busy);
+  }, [busy]);
 
   const releaseMic = useCallback(() => {
     if (timerRef.current) window.clearInterval(timerRef.current);
@@ -81,7 +94,10 @@ export default function Recorder({ maxSeconds, onSubmit, submitLabel = "Submit a
 
   // Release the microphone if this component unmounts or its route is hidden mid-recording.
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      onBusyRef.current?.(false);
       const rec = recorderRef.current;
       if (rec && rec.state !== "inactive") {
         rec.onstop = null;
@@ -120,6 +136,11 @@ export default function Recorder({ maxSeconds, onSubmit, submitLabel = "Submit a
     } catch (err) {
       setPhase("idle");
       setProblem(micProblem(err));
+      return;
+    }
+    if (!mountedRef.current) {
+      // The user left the page while the permission prompt was open: don't keep the mic on.
+      stream.getTracks().forEach((t) => t.stop());
       return;
     }
     streamRef.current = stream;

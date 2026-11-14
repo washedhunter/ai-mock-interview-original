@@ -20,7 +20,8 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 
 # Space-separated faster-whisper models to bake in (empty = none, e.g. for TRANSCRIBER=groq/mock).
-RUN useradd --create-home --uid 10001 app && mkdir -p /models && chown app /models
+# /app/audio is only written when KEEP_AUDIO=true (compose mounts a volume there).
+RUN useradd --create-home --uid 10001 app && mkdir -p /models /app/audio && chown app /models /app/audio
 USER app
 
 ARG WHISPER_PRELOAD="base.en"

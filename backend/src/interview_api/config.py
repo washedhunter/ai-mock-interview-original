@@ -20,8 +20,9 @@ class Settings(BaseSettings):
     ai_mode: Literal["auto", "live", "mock"] = "auto"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
-    gemini_timeout_s: float = 90.0
+    gemini_timeout_s: float = 45.0  # per request
     gemini_max_attempts: int = 4
+    gemini_total_budget_s: float = 60.0  # stop retrying after this (a user is waiting)
 
     # local = faster-whisper in this process; groq = Whisper on Groq's API; mock = canned transcript
     transcriber: Literal["local", "groq", "mock"] = "local"
@@ -37,22 +38,28 @@ class Settings(BaseSettings):
     # --- audio --------------------------------------------------------------------------------
     keep_audio: bool = False  # raw audio is deleted right after transcription unless this is true
     audio_dir: str = "audio"  # only used when keep_audio is true
-    max_audio_bytes: int = 15 * 1024 * 1024
+    max_audio_bytes: int = 10 * 1024 * 1024  # 4 minutes of browser audio is ~1-4 MB
     max_answer_seconds: int = 240
 
     # --- accounts -----------------------------------------------------------------------------
     session_cookie_name: str = "mi_session"
     session_days: int = 14
-    cookie_secure: bool = False  # set true behind HTTPS
-    trust_proxy_headers: bool = (
-        True  # use X-Forwarded-For for the client IP (the Next proxy sets it)
-    )
+    # auto = Secure flag when the request came in over HTTPS (X-Forwarded-Proto from the proxy)
+    cookie_secure: Literal["auto", "true", "false"] = "auto"
+    # Client IP = the LAST X-Forwarded-For entry. The Next proxy reduces the header to the hop
+    # its own ingress appended, so a browser can't choose its IP for the rate limits.
+    trust_proxy_headers: bool = True
+    enable_api_docs: bool = True  # Swagger at /api/docs (switch off in production)
 
     # --- rate limits (per user unless noted) ----------------------------------------------------
     rate_interviews_per_hour: int = 10
     rate_answers_per_hour: int = 60
     rate_completions_per_hour: int = 20
-    rate_logins_per_15min: int = 20  # per client IP and per email
+    rate_logins_per_15min: int = 20  # login + sign-up attempts per client IP
+    rate_signups_per_hour: int = 5  # new accounts per client IP
+    rate_login_failures_per_hour: int = 50  # failed logins per email (across IPs)
+    # Across all users: protects the free Gemini / Groq quota from one abusive client.
+    rate_ai_calls_per_hour: int = 300
 
     # --- interview + scoring ------------------------------------------------------------------
     min_questions: int = 3

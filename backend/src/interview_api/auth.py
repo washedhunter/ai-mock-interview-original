@@ -40,7 +40,15 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_session(db: Session, user: User, response: Response) -> None:
+def cookie_secure(request: Request) -> bool:
+    mode = get_settings().cookie_secure
+    if mode != "auto":
+        return mode == "true"
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return proto.split(",")[0].strip().lower() == "https"
+
+
+def create_session(db: Session, user: User, request: Request, response: Response) -> None:
     settings = get_settings()
     token = secrets.token_urlsafe(32)
     expires = datetime.now(UTC) + timedelta(days=settings.session_days)
@@ -57,7 +65,7 @@ def create_session(db: Session, user: User, response: Response) -> None:
         token,
         max_age=settings.session_days * 86400,
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=cookie_secure(request),
         samesite="lax",
         path="/",
     )
@@ -73,7 +81,7 @@ def end_session(db: Session, request: Request, response: Response) -> None:
         settings.session_cookie_name,
         path="/",
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=cookie_secure(request),
         samesite="lax",
     )
 
@@ -96,7 +104,9 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
 
 def client_ip(request: Request) -> str:
     if get_settings().trust_proxy_headers:
+        # The right-most entry was added by the proxy closest to us; earlier entries are
+        # whatever the client claimed and can't be trusted.
         fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            return fwd.split(",")[0].strip()
+        if fwd and fwd.split(",")[-1].strip():
+            return fwd.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"

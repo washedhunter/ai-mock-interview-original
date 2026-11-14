@@ -11,18 +11,37 @@ const HOP_BY_HOP = new Set([
   "transfer-encoding",
   "set-cookie",
 ]);
-const FORWARD = ["accept", "content-type", "cookie", "user-agent", "x-forwarded-for"];
+const FORWARD = ["accept", "content-type", "cookie", "user-agent"];
+const MAX_BODY_BYTES = Number(process.env.MAX_UPLOAD_BYTES ?? 10 * 1024 * 1024) + 64 * 1024;
+
+/** The client IP as seen by the hop in front of this server: the LAST X-Forwarded-For entry
+ *  (the platform ingress appends it; Next.js fills the header from the socket when absent).
+ *  Earlier entries are whatever the browser claimed, so they are dropped. */
+function clientIp(req: NextRequest): string | null {
+  const parts = (req.headers.get("x-forwarded-for") ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  return parts.at(-1) ?? null;
+}
 
 async function proxy(req: NextRequest, ctx: RouteContext<"/api/[...path]">) {
   const backend = (process.env.BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
   const { path } = await ctx.params;
   const target = `${backend}/api/${path.map(encodeURIComponent).join("/")}${req.nextUrl.search}`;
 
+  const length = Number(req.headers.get("content-length") ?? 0);
+  if (length > MAX_BODY_BYTES) {
+    return Response.json({ detail: "Recording is too large" }, { status: 413 });
+  }
+
   const headers = new Headers();
   for (const name of FORWARD) {
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
+  const ip = clientIp(req);
+  if (ip) headers.set("x-forwarded-for", ip);
+  // Lets the backend mark the session cookie Secure when the site is served over HTTPS.
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim() || req.nextUrl.protocol.replace(":", "");
+  headers.set("x-forwarded-proto", proto);
 
   const init: RequestInit & { duplex?: "half" } = {
     method: req.method,

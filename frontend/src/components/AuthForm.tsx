@@ -10,9 +10,11 @@ import type { User } from "@/lib/types";
 
 import { Alert, Card } from "./ui";
 
-function safeNext(next: string | null): string {
-  // Only same-site paths: never redirect to another origin.
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+/** Only a plain same-site path is allowed after login; anything else goes to the dashboard.
+ *  (Browsers treat "/\evil.com" or "/%09/evil.com" like "//evil.com", so check strictly.) */
+export function safeNext(next: string | null): string {
+  if (!next || !/^\/[A-Za-z0-9/_-]*$/.test(next) || next.startsWith("//")) return "/dashboard";
+  return next;
 }
 
 export default function AuthForm({ mode }: { mode: "login" | "signup" }) {

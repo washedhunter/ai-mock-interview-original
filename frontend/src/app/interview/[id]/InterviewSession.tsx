@@ -13,7 +13,7 @@ import type { Interview, Question } from "@/lib/types";
 export default function InterviewSession() {
   const { id } = useParams<{ id: string }>();
   const user = useRequireUser();
-  const { meta } = useAuth();
+  const { meta, apiDown } = useAuth();
   const on401 = useOn401();
   const router = useRouter();
   const [iv, setIv] = useState<Interview | null>(null);
@@ -21,6 +21,7 @@ export default function InterviewSession() {
   const [reanswering, setReanswering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [recorderBusy, setRecorderBusy] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -83,6 +84,7 @@ export default function InterviewSession() {
   }
 
   if (error && !iv) return <Alert>{error}</Alert>;
+  if (apiDown) return <Alert>{apiDown}</Alert>;
   if (!iv || !meta) return <Spinner label="Loading interview…" />;
 
   const q = iv.questions[current];
@@ -109,6 +111,7 @@ export default function InterviewSession() {
                   setCurrent(i);
                   setReanswering(false);
                 }}
+                disabled={recorderBusy}
                 aria-current={i === current ? "step" : undefined}
                 aria-label={`Question ${i + 1}${x.answer ? " (answered)" : ""}`}
                 className={`h-8 w-8 rounded-full text-sm font-medium ${
@@ -167,6 +170,7 @@ export default function InterviewSession() {
             key={`${q.id}-${reanswering}`}
             maxSeconds={meta.max_answer_seconds}
             onSubmit={(blob, filename) => submitAnswer(q, blob, filename)}
+            onBusyChange={setRecorderBusy}
           />
           {reanswering && (
             <button type="button" onClick={() => setReanswering(false)} className="self-start text-sm text-slate-500 hover:underline">
@@ -182,7 +186,8 @@ export default function InterviewSession() {
         <button
           type="button"
           onClick={finish}
-          disabled={answered === 0 || finishing}
+          disabled={answered === 0 || finishing || recorderBusy}
+          title={recorderBusy ? "Wait until the current answer is recorded and scored" : undefined}
           className={`rounded-lg px-5 py-2 font-medium disabled:opacity-50 ${
             answered === iv.questions.length
               ? "bg-emerald-600 text-white hover:bg-emerald-500"

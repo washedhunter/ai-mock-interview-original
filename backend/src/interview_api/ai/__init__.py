@@ -21,6 +21,7 @@ def get_ai() -> InterviewAI:
             api_key=s.gemini_api_key,
             max_attempts=s.gemini_max_attempts,
             timeout_s=s.gemini_timeout_s,
+            total_budget_s=s.gemini_total_budget_s,
         )
     from .mock import MockInterviewAI
 

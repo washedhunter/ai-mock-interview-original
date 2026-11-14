@@ -85,7 +85,8 @@ deliberately includes one weak, hesitant answer.
 - **Filler words:** all 7 scripted fillers ("um" ×4, "uh", "like", "basically") were kept by
   Whisper and detected. The 6th filler in row 3 is a real artefact: Chromium loops the audio file,
   so the recording ended with the first "Um" again. The note on row 6: the run counted "known
-  causes, *like* a holiday" as a filler; the rule was fixed afterwards (now 0) with a test.
+  causes, *like* a holiday" as a filler; the rule was fixed afterwards and a test added. Re-scoring
+  the stored word timings with the fixed rule: 0 fillers, overall 97.7 → 98.2; every other row is unchanged.
   TTS speaks fillers clearly; real hesitations are mumbled, and Whisper may drop more of them.
 - **Speed:** feedback appeared **3.5–12.1 s** after "Submit" (upload + Whisper `base.en` on CPU +
   Gemini `gemini-3.5-flash-lite`), on Docker Desktop with 12 CPUs. Whisper `base.en` alone
@@ -98,7 +99,8 @@ deliberately includes one weak, hesitant answer.
 
 ### Tests
 
-- Backend: **72 pytest tests** against PostgreSQL (Gemini, Groq and Whisper mocked).
+- Backend: **91 pytest tests** against PostgreSQL (Gemini, Groq and Whisper mocked), including
+  per-user isolation, rate limits, audio deletion, upload limits and two race conditions.
 - Frontend: typecheck, ESLint, production build.
 - End-to-end: **3 Playwright tests** against the Docker Compose stack with mocked AI and Chromium's
   fake microphone: the full happy path (sign up → 3 voice answers → feedback → finish → history →
@@ -199,7 +201,7 @@ docs/DECISIONS.md             why things are built this way
 
 - **Same-origin proxy** instead of CORS: the browser only talks to the Next.js app, so the session
   cookie is first-party and httpOnly, and the backend URL is a runtime setting.
-- **Score each answer right away** with a synchronous request (5–12 s) rather than a job queue:
+- **Score each answer right away** with a synchronous request (3.5–12 s measured) rather than a job queue:
   simpler, and a failure costs one answer, not the interview.
 - **LLM for content, arithmetic for delivery:** the measured clarity part is reproducible and
   explainable; the LLM covers what metrics can't.
@@ -218,7 +220,8 @@ More in [docs/DECISIONS.md](docs/DECISIONS.md).
   real-voice run used synthetic speech.
 - Transcription runs inside the request. Very long answers on a slow CPU would want a background
   job with progress polling.
-- Rate limits live in process memory (single replica).
+- Rate limits live in process memory (single replica). A global hourly cap on AI calls protects
+  the free Gemini/Groq quota, but a determined abuser can still use it up for an hour.
 - No email verification or password reset.
 
 ## License

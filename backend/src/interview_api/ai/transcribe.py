@@ -149,3 +149,28 @@ class GroqWhisper:
         if duration is None:
             duration = words[-1].end if words else 0.0
         return Transcript(text=text, words=words, duration=float(duration), model=self.model_name)
+
+
+def probe_duration(path: Path) -> float | None:
+    """Length of the recording in seconds, read from the container without decoding audio.
+
+    Browser recordings (webm/opus from MediaRecorder) often have no duration in the header, so
+    the packets are demuxed and the last end time taken. Returns None if the file can't be read
+    (the transcriber then reports the decode error).
+    """
+    import av
+
+    try:
+        with av.open(str(path), mode="r", metadata_errors="ignore") as container:
+            if container.duration:
+                return container.duration / av.time_base
+            stream = next((s for s in container.streams if s.type == "audio"), None)
+            if stream is None:
+                return None
+            end = 0.0
+            for packet in container.demux(stream):
+                if packet.pts is not None and packet.time_base is not None:
+                    end = max(end, float((packet.pts + (packet.duration or 0)) * packet.time_base))
+            return end
+    except Exception:
+        return None

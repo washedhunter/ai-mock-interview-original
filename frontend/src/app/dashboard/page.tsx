@@ -11,7 +11,7 @@ import type { Interview, InterviewSummary } from "@/lib/types";
 
 export default function Dashboard() {
   const user = useRequireUser();
-  const { meta } = useAuth();
+  const { meta, apiDown } = useAuth();
   const on401 = useOn401();
   const router = useRouter();
   const [recent, setRecent] = useState<InterviewSummary[] | null>(null);
@@ -46,6 +46,7 @@ export default function Dashboard() {
     }
   }
 
+  if (apiDown) return <Alert>{apiDown}</Alert>;
   if (!user || !meta) return <Spinner />;
   const inProgress = recent?.filter((r) => r.status === "in_progress") ?? [];
   const select =

@@ -12,12 +12,20 @@ const LINKS = [
 ];
 
 export default function Nav() {
-  const { user, meta, logout } = useAuth();
+  const { user, meta, apiDown, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
   return (
     <header className="border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80">
+      {apiDown && (
+        <div role="alert" className="bg-red-100 px-4 py-2 text-center text-sm text-red-900 dark:bg-red-950 dark:text-red-200">
+          {apiDown}{" "}
+          <button type="button" className="font-medium underline" onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        </div>
+      )}
       {meta?.ai_mode === "demo" && (
         <div className="bg-amber-100 px-4 py-1 text-center text-xs text-amber-900 dark:bg-amber-900/40 dark:text-amber-200" data-testid="demo-banner">
           Demo mode: questions and feedback are canned because no Gemini API key is configured. Transcription and

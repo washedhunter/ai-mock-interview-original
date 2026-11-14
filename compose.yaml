@@ -27,6 +27,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://interview:${POSTGRES_PASSWORD:-interview}@db:5432/interview
       WHISPER_MODEL: ${WHISPER_MODEL:-base.en}
+    volumes:
+      - audio:/app/audio  # only used when KEEP_AUDIO=true
     depends_on:
       db:
         condition: service_healthy
@@ -45,3 +47,4 @@ services:
 
 volumes:
   pgdata:
+  audio:

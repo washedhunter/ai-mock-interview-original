@@ -28,7 +28,7 @@ Plain-English notes on why the project is built the way it is, and what else was
 4. Feedback appears immediately for that question; "Finish" adds an overall debrief.
 
 *Why score each answer immediately instead of at the end:* the user learns as they go, a failure
-only costs one answer, and each request stays short (5–12 s measured).
+only costs one answer, and each request stays short (3.5–12 s measured).
 
 *Why synchronous requests instead of a job queue:* one request per answer that finishes in seconds
 doesn't need Celery/Redis. A queue would be the next step if answers got much longer or the host
@@ -65,10 +65,11 @@ much slower (see Limitations in the README).
   so start-up never depends on Hugging Face.
 - **PyAV is pinned below 19.** faster-whisper 1.2.1 calls `av.open(..., metadata_errors=...)`,
   which PyAV 19 removed; every transcription failed until the pin.
-- **Deployment uses Whisper large-v3-turbo on Groq's API** (free tier, word timestamps) when
-  `GROQ_API_KEY` is set. The free host's containers are too small (about 0.2 vCPU / 512 MB) for a
-  useful local model. It is still Whisper, behind the same `Transcriber` interface. Without a Groq
-  key the deployment falls back to faster-whisper `tiny.en`.
+- **The deployment can use Whisper large-v3-turbo on Groq's API** (`TRANSCRIBER=groq`; free tier,
+  word timestamps), because the free host's containers are small (about 0.2 vCPU / 512 MB). It is
+  still Whisper, behind the same `Transcriber` interface. The choice is made by configuration, not
+  automatically: the deploy step sets `TRANSCRIBER=groq` when a Groq key is available, otherwise
+  `TRANSCRIBER=local` with `tiny.en` baked into the image.
 
 ## Gemini
 
@@ -95,8 +96,32 @@ much slower (see Limitations in the README).
 - **Isolation:** every query filters by the logged-in user; another user's interview id returns 404
   (same as a missing one). Tested for every endpoint.
 - **Rate limits:** a small in-memory sliding window per user (interview creation, answer uploads,
-  completion) and per IP + email for login/sign-up. *Trade-off:* per process, fine for the single
-  replica this runs as; multiple replicas would need Postgres or Redis.
+  completion), per client IP for login/sign-up (plus at most 5 new accounts per IP per hour), per
+  email for *failed* logins only (a correct password isn't blocked by someone else's typos until
+  50 failures/hour), and a **global** hourly cap on AI calls so one client can't burn the free
+  Gemini/Groq quota. Stale keys are purged so memory stays bounded. *Trade-off:* per process, fine
+  for the single replica this runs as; multiple replicas would need Postgres or Redis.
+- **Client IP behind proxies:** only the right-most `X-Forwarded-For` entry is trusted (the one the
+  platform's ingress appends). The Next.js proxy reduces the header to that entry before calling
+  the backend, so behind an ingress a browser can't pick a new IP per request to dodge the per-IP
+  limits. *Limit:* with nothing in front of Next.js (local `docker compose`), Next.js keeps a
+  browser-supplied header and route handlers can't see the socket address, so per-IP limits are
+  spoofable there (checked: 6 sign-ups with fake headers all succeeded locally). The per-user and
+  global AI caps don't depend on the IP.
+- **Secure cookie:** `COOKIE_SECURE=auto` sets the Secure flag whenever the request arrived over
+  HTTPS (`X-Forwarded-Proto`), so production is safe by default and `http://localhost` still works.
+- **Open redirects:** the post-login `next` parameter must be a plain path (`/[A-Za-z0-9/_-]*`);
+  `/\evil.com`-style tricks fall back to the dashboard.
+- **Upload bounds:** bodies over the limit are refused from `Content-Length` (in the Next proxy and
+  in a backend middleware) before being read, and the recording's length is read from the container
+  (demuxing, no decoding) so an over-long answer is refused **before** any transcription CPU or
+  quota is spent.
+- **Slow AI calls don't hold database connections.** Each request reads what it needs, ends its
+  transaction, calls Whisper/Gemini, then re-reads the interview under a row lock to write. The lock
+  also settles two races: an answer arriving after "Finish" (refused with 409) and "Finish" while
+  an answer is being saved (409, the client finishes again). The UI disables Finish during an
+  upload, too. Gemini retries stop after 60 s in total, well inside the proxy's timeout.
+- **Swagger** (`/api/docs`) can be switched off with `ENABLE_API_DOCS=false` (done in production).
 - **Audio retention:** deleted in a `finally` block right after transcription, including when
   transcription fails (tested). `KEEP_AUDIO=true` opts in to keeping it.
 
@@ -113,7 +138,7 @@ much slower (see Limitations in the README).
 
 ## Testing
 
-- **Backend (pytest, 72 tests):** auth, sessions, isolation, rate limits, audio deletion, upload
+- **Backend (pytest, 91 tests):** auth, sessions, isolation, rate limits, audio deletion, upload
   validation, clarity maths, scoring, the Gemini adapter (fake client: retries, quota, bad JSON,
   injection delimiter), both transcribers (fake model / mocked HTTP), migrations. Runs against real
   PostgreSQL. Nothing external is called: an autouse fixture makes creating a Gemini client fail.

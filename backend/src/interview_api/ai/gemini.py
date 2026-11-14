@@ -14,7 +14,13 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
-from tenacity import RetryCallState, Retrying, retry_if_exception, stop_after_attempt
+from tenacity import (
+    RetryCallState,
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    stop_after_delay,
+)
 
 from .base import AIError, QuestionContext, ScoredItem
 from .schemas import AnswerAssessment, GeneratedQuestion, InterviewSummary, QuestionSet
@@ -144,13 +150,15 @@ class GeminiInterviewAI:
         max_attempts: int = 4,
         initial_backoff: float = 2.0,
         max_wait: float = 20.0,
-        timeout_s: float = 90.0,
+        timeout_s: float = 45.0,
+        total_budget_s: float = 60.0,
         sleep: Callable[[float], None] = time.sleep,
     ):
         self.model_name = model
         self.max_attempts = max_attempts
         self.initial_backoff = initial_backoff
         self.max_wait = max_wait  # a user is waiting, so never sleep longer than this per retry
+        self.total_budget_s = total_budget_s  # and stop retrying after this long overall
         self._sleep = sleep
         self._client = client or self._make_client(api_key, timeout_s)
 
@@ -201,7 +209,7 @@ class GeminiInterviewAI:
                 raise _BadOutput(str(exc)) from exc
 
         retrying = Retrying(
-            stop=stop_after_attempt(self.max_attempts),
+            stop=stop_after_attempt(self.max_attempts) | stop_after_delay(self.total_budget_s),
             wait=self._wait,
             retry=retry_if_exception(is_retryable),
             sleep=self._sleep,
