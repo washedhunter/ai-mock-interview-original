@@ -24,6 +24,7 @@ def words_at(tokens, start=0.0, step=0.4, dur=0.3, pause_after=None, pause=0.0):
         ("I would like to explain", {}),  # verb "like" is not a filler
         ("it was, like, really slow", {"like": 1}),
         ("it was like, slow", {"like": 1}),
+        ("known causes, like a holiday or a price change", {}),  # seen in a real run
         ("what kind of database did you use", {}),
         ("it is kind of slow and sort of broken", {"kind of": 1, "sort of": 1}),
         ("you know, I mean, basically it works", {"you know": 1, "i mean": 1, "basically": 1}),

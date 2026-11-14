@@ -74,9 +74,9 @@ def count_fillers(raw_tokens: Sequence[str]) -> Counter[str]:
             i += 1
             continue
         if t == "like":
-            # Only the interjection: "like," or ", like" (Whisper punctuates it that way).
-            prev_raw = raw_tokens[i - 1] if i > 0 else ""
-            if raw_tokens[i].rstrip().endswith(",") or prev_raw.rstrip().endswith(","):
+            # Only the interjection, which Whisper punctuates as "like," ("it was, like, slow").
+            # ", like a holiday" introduces an example and is not counted.
+            if raw_tokens[i].rstrip().endswith(","):
                 found["like"] += 1
             i += 1
             continue
