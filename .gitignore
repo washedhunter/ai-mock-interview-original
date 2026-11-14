@@ -36,3 +36,7 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+
+# real-voice run state
+frontend/.voice-state.json
+frontend/.voice-run.json
