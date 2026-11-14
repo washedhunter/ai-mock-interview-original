@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from interview_api.config import get_settings
 from interview_api.models import Base
@@ -29,6 +29,9 @@ def run_migrations_online() -> None:
     with engine.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
+            # Serverless hosts can start several containers at once, and each runs
+            # `alembic upgrade head` on boot; a transaction-scoped advisory lock makes them take turns.
+            connection.execute(text("SELECT pg_advisory_xact_lock(724110)"))
             context.run_migrations()
     engine.dispose()
 
