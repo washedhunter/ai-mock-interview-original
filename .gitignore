@@ -40,3 +40,6 @@ Thumbs.db
 # real-voice run state
 frontend/.voice-state.json
 frontend/.voice-run.json
+
+# Vercel CLI link (project id) and pulled env files
+.vercel
