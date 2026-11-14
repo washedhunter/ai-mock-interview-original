@@ -12,6 +12,16 @@ Next.js · FastAPI · PostgreSQL · Gemini API · Whisper (faster-whisper) · Do
 quota). Sign up with any email; it isn't verified. Use Chrome, Edge, Firefox or Safari and allow
 the microphone.
 
+## At a glance
+
+| | |
+|---|---|
+| **Problem** | Practising interviews out loud, and getting useful feedback, is hard to do alone. |
+| **What it does** | A web app: pick a job role, answer AI-generated questions by speaking, and get a score and feedback on what you said and how clearly you said it, with your history and progress saved. |
+| **Result** | Live on the web; feedback arrives about 10 seconds after each spoken answer. The full flow (sign up → voice answers → feedback → history) is tested automatically in a real browser on every change. |
+| **Built with** | Next.js, TypeScript, FastAPI (Python), PostgreSQL, Gemini API, Whisper speech-to-text, Docker, Vercel, Playwright |
+| **See it** | [Live demo](https://ai-mock-interview-cyan-psi.vercel.app) · screenshots below · `docker compose up` runs it locally. |
+
 ![Feedback for one answer](docs/img/interview_feedback.png)
 
 | Results and debrief | Progress over time |
