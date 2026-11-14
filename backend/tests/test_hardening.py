@@ -45,6 +45,37 @@ def test_client_ip_is_the_rightmost_forwarded_entry(client, settings, monkeypatc
     assert r.status_code == 429
 
 
+def test_proxy_client_ip_header_wins_over_forwarded_for(client, settings, monkeypatch):
+    """Behind a hop that rewrites X-Forwarded-For, users still get separate per-IP buckets."""
+    monkeypatch.setattr(settings, "rate_logins_per_15min", 1)
+    body = {"email": "a@example.com", "password": "x"}
+    shared_hop = {"x-forwarded-for": "10.1.1.1"}  # what the internal hop would add for everyone
+    assert (
+        client.post(
+            "/api/auth/login",
+            json=body,
+            headers={**shared_hop, "x-interview-client-ip": "198.51.100.1"},
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/auth/login",
+            json=body,
+            headers={**shared_hop, "x-interview-client-ip": "198.51.100.2"},
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/auth/login",
+            json=body,
+            headers={**shared_hop, "x-interview-client-ip": "198.51.100.1"},
+        ).status_code
+        == 429
+    )
+
+
 def test_signups_per_ip_are_capped(client, settings, monkeypatch):
     monkeypatch.setattr(settings, "rate_signups_per_hour", 2)
     signup(client, "s1@example.com")

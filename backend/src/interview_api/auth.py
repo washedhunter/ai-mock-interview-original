@@ -104,6 +104,12 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
 
 def client_ip(request: Request) -> str:
     if get_settings().trust_proxy_headers:
+        # Set by our own Next.js proxy, which overwrites anything the browser sent. Needed on hosts
+        # whose internal service-to-service hop rewrites X-Forwarded-For (Vercel bindings do). The
+        # name is app-specific so it cannot collide with a header a platform sets.
+        own = (request.headers.get("x-interview-client-ip") or "").strip()
+        if own:
+            return own
         # The right-most entry was added by the proxy closest to us; earlier entries are
         # whatever the client claimed and can't be trusted.
         fwd = request.headers.get("x-forwarded-for")

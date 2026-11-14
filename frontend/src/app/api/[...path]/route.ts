@@ -38,7 +38,14 @@ async function proxy(req: NextRequest, ctx: RouteContext<"/api/[...path]">) {
     if (value) headers.set(name, value);
   }
   const ip = clientIp(req);
-  if (ip) headers.set("x-forwarded-for", ip);
+  if (ip) {
+    headers.set("x-forwarded-for", ip);
+    // Also sent in a header of our own: some hosts' internal hop to the backend rewrites
+    // X-Forwarded-For with this server's address (Vercel service bindings do); the name is
+    // app-specific so it cannot collide with a header a platform sets. The browser
+    // can't set it, because only the FORWARD allowlist above is copied from the request.
+    headers.set("x-interview-client-ip", ip);
+  }
   // Lets the backend mark the session cookie Secure when the site is served over HTTPS.
   const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim() || req.nextUrl.protocol.replace(":", "");
   headers.set("x-forwarded-proto", proto);

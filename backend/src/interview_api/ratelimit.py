@@ -6,6 +6,7 @@ replicas it would move to Postgres or Redis (noted in docs/DECISIONS.md).
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -14,6 +15,8 @@ from collections import defaultdict, deque
 from fastapi import HTTPException, status
 
 MAX_WINDOW_S = 3600  # the longest window any caller uses; older hits are purged
+
+log = logging.getLogger(__name__)
 
 
 class RateLimiter:
@@ -36,8 +39,13 @@ class RateLimiter:
         for k in stale:
             del self._hits[k]
 
-    def _raise_if_full(self, hits: deque[float], limit: int, window_s: float, now: float) -> None:
+    def _raise_if_full(
+        self, key: str, hits: deque[float], limit: int, window_s: float, now: float
+    ) -> None:
         if len(hits) >= limit:
+            # Logged so per-IP keys can be checked behind a proxy; email keys are masked.
+            scope, _, subject = key.partition(":")
+            log.warning("rate limit hit: %s:%s", scope, "<email>" if "@" in subject else subject)
             retry = max(1, math.ceil(hits[0] + window_s - now))
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
@@ -49,7 +57,7 @@ class RateLimiter:
         """Raise 429 if `key` is at its limit, without recording a hit."""
         now = self._clock()
         with self._lock:
-            self._raise_if_full(self._prune(key, window_s, now), limit, window_s, now)
+            self._raise_if_full(key, self._prune(key, window_s, now), limit, window_s, now)
 
     def record(self, key: str) -> None:
         now = self._clock()
