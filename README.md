@@ -7,8 +7,10 @@ over time.
 
 Next.js · FastAPI · PostgreSQL · Gemini API · Whisper (faster-whisper) · Docker
 
-**Live demo:** _deployment in progress (Northflank); the URL goes here once it passes the same
-end-to-end check._
+**Live demo:** https://ai-mock-interview-cyan-psi.vercel.app (free tier: the first request after
+~5 idle minutes takes a few seconds while the backend wakes up; the Gemini free tier has a daily
+quota). Sign up with any email; it isn't verified. Use Chrome, Edge, Firefox or Safari and allow
+the microphone.
 
 ![Feedback for one answer](docs/img/interview_feedback.png)
 
@@ -16,7 +18,8 @@ end-to-end check._
 |---|---|
 | ![Results](docs/img/results.png) | ![Progress](docs/img/progress.png) |
 
-All screenshots are from the real app (real Gemini, real Whisper) during the real-voice run below.
+All screenshots are from the real app (real Gemini, real Whisper) during the real-voice runs below
+(local, plus [one from the live site](docs/img/live_results.png)).
 
 ## How it works
 
@@ -97,9 +100,29 @@ deliberately includes one weak, hesitant answer.
   were written by the developer. They show that the pipeline works and discriminates, not how
   accurate the scores are.
 
+### Live deployment run (2026-11-15, Vercel, real Gemini + real Whisper)
+
+The same browser harness against the deployed URL: a new user signed up, took a Junior Backend
+Developer interview (3 questions) and answered with synthesised speech written for the questions
+Gemini asked; the second answer has scripted fillers ("um" ×2, "like", "uh") and a 2.5 s pause.
+
+| Question (Gemini) | Words / wpm | Fillers found | Pauses ≥ 2 s | Content | Clarity | Overall | Feedback after Submit |
+|---|---|---|---|---|---|---|---|
+| Critical feedback on a pull request (behavioural) | 123 / 156 | 0 | 0 | 90 | 92 | **91** | 10.8 s |
+| Database indexes and when not to add one (technical) | 125 / 148 | 4 (all scripted ones) | 1 (3.4 s) | 93 | 80 | **89** | 11.2 s |
+| PUT vs PATCH (technical) | 107 / 139 | 0 | 0 | 95 | 96 | **95** | 9.7 s |
+
+- **Interview: 92 overall** (content 93, clarity 89), shown in History and Progress
+  ([screenshot](docs/img/live_results.png)).
+- Transcription ran in the deployed backend container (faster-whisper `base.en`, 2 GB / 1 vCPU);
+  every answer row has `audio_kept = false`.
+- **Cold start:** after more than 6 idle minutes the first API request took **5.9 s** (warm: 0.8 s).
+- Whisper slips on synthetic speech: "pull request" once came out as "pool request", and the
+  harness stopped recording just before each clip ended, which garbled the last word or two.
+
 ### Tests
 
-- Backend: **91 pytest tests** against PostgreSQL (Gemini, Groq and Whisper mocked), including
+- Backend: **92 pytest tests** against PostgreSQL (Gemini, Groq and Whisper mocked), including
   per-user isolation, rate limits, audio deletion, upload limits and two race conditions.
 - Frontend: typecheck, ESLint, production build.
 - End-to-end: **3 Playwright tests** against the Docker Compose stack with mocked AI and Chromium's
@@ -168,8 +191,42 @@ weights, cookie security.
 
 ## Deployment
 
-_Being set up on Northflank (free Sandbox: frontend + backend services + PostgreSQL add-on). This
-section will list every step once the deployment passes the end-to-end check._
+Live on **Vercel** (free Hobby plan) as one project with two
+[Vercel Services](https://vercel.com/docs/services), configured in [`vercel.json`](vercel.json):
+
+| Service | What runs | Reachable |
+|---|---|---|
+| `frontend` | the Next.js app, built by Vercel | public (all routes) |
+| `backend` | **the same `backend/Dockerfile`** as Docker Compose, on Vercel's container runtime (Whisper `base.en` baked in, `alembic upgrade head` on start, 2 GB / 1 vCPU) | private: only the frontend, via a service binding that sets `BACKEND_URL` |
+
+PostgreSQL is **Neon** (free plan) from Vercel's Neon integration, which sets `DATABASE_URL`.
+
+Steps used (Vercel CLI, from the repo root):
+
+```bash
+npm i -g vercel
+vercel login
+vercel link --yes --project ai-mock-interview      # detects the two services in vercel.json
+vercel integration add neon --billing-plan free_v3 --meta region=iad1 --meta auth=false
+vercel env add GEMINI_API_KEY --environment production --sensitive   # paste the key at the prompt
+vercel env add PORT --environment production --value 8000 --yes      # the backend container's port
+vercel env add ENABLE_API_DOCS --environment production --value false --yes
+vercel env add MAX_AUDIO_BYTES --environment production --value 4000000 --yes
+vercel env add MAX_UPLOAD_BYTES --environment production --value 4000000 --yes
+vercel deploy --prod
+```
+
+What the platform changed in the app (all small, all covered in [DECISIONS.md](docs/DECISIONS.md#hosting)):
+
+- Request bodies are capped at 4.5 MB, so the recorder records Opus at 32 kbit/s (~1 MB for
+  4 minutes) and uploads over 4 MB are refused with a clear message.
+- Containers scale to zero after ~5 idle minutes and several can start at once, so migrations take
+  a Postgres advisory lock.
+- The internal hop from frontend to backend rewrites `X-Forwarded-For`, which made every visitor
+  share one per-IP rate-limit bucket. Found on the live site and fixed: the proxy passes the client
+  IP in its own header (details in DECISIONS.md).
+
+[`.vercelignore`](.vercelignore) keeps `.env` files out of CLI uploads.
 
 ## Project structure
 
@@ -206,8 +263,8 @@ docs/DECISIONS.md             why things are built this way
 - **LLM for content, arithmetic for delivery:** the measured clarity part is reproducible and
   explainable; the LLM covers what metrics can't.
 - **Whisper model baked into the image**, so containers start without downloading anything.
-- **In-memory rate limiting**, which is right for one backend replica. More replicas would need a
-  shared store.
+- **In-memory rate limiting**, which is right for one backend replica. More replicas (or
+  Vercel's per-instance scaling) would need a shared store.
 - **Fixed role list** keeps progress comparable and free text out of the question prompt.
 
 More in [docs/DECISIONS.md](docs/DECISIONS.md).
@@ -220,8 +277,11 @@ More in [docs/DECISIONS.md](docs/DECISIONS.md).
   real-voice run used synthetic speech.
 - Transcription runs inside the request. Very long answers on a slow CPU would want a background
   job with progress polling.
-- Rate limits live in process memory (single replica). A global hourly cap on AI calls protects
-  the free Gemini/Groq quota, but a determined abuser can still use it up for an hour.
+- Rate limits live in process memory: exact for one replica, per instance on Vercel (and reset by
+  a new deployment). A global hourly cap on AI calls protects the free Gemini quota, but a
+  determined abuser can still use it up for an hour. Next: move the counters to Postgres.
+- The live demo runs on free tiers: the backend scales to zero when idle, and the Gemini free tier
+  has a daily quota, so the demo can be slow to wake or temporarily out of quota.
 - No email verification or password reset.
 
 ## License

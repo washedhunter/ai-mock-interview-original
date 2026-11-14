@@ -56,7 +56,7 @@ much slower (see Limitations in the README).
 - **"like" is only a filler when punctuated as an interjection** ("it was, like, slow"). The first
   rule also counted ", like a holiday" (an example); a real run caught it and a test pins it.
 
-## Speech-to-text: faster-whisper locally, Groq Whisper in the free deployment
+## Speech-to-text: faster-whisper, locally and in the deployment
 
 - **faster-whisper (CTranslate2, int8, CPU)** is ~4× faster than the reference implementation and
   needs no GPU. `base.en` transcribed 21.5 s of speech in 2.2 s on the dev machine; `small.en` took
@@ -65,11 +65,13 @@ much slower (see Limitations in the README).
   so start-up never depends on Hugging Face.
 - **PyAV is pinned below 19.** faster-whisper 1.2.1 calls `av.open(..., metadata_errors=...)`,
   which PyAV 19 removed; every transcription failed until the pin.
-- **The deployment can use Whisper large-v3-turbo on Groq's API** (`TRANSCRIBER=groq`; free tier,
-  word timestamps), because the free host's containers are small (about 0.2 vCPU / 512 MB). It is
-  still Whisper, behind the same `Transcriber` interface. The choice is made by configuration, not
-  automatically: the deploy step sets `TRANSCRIBER=groq` when a Groq key is available, otherwise
-  `TRANSCRIBER=local` with `tiny.en` baked into the image.
+- **The deployment runs the same image and model** (`base.en`, baked in): Vercel's container
+  functions have 2 GB / 1 vCPU, enough for `base.en` int8. Live answers of ~50 s got feedback in
+  9–11 s (README).
+- **Optional: Whisper large-v3-turbo on Groq's API** (`TRANSCRIBER=groq`, word timestamps) behind the
+  same `Transcriber` interface, for hosts too small to run Whisper in-process. It was built when the
+  first hosting choice (Northflank, ~0.2 vCPU / 512 MB) looked too small; it is tested with mocked
+  HTTP but not used by the live deployment.
 
 ## Gemini
 
@@ -99,12 +101,19 @@ much slower (see Limitations in the README).
   completion), per client IP for login/sign-up (plus at most 5 new accounts per IP per hour), per
   email for *failed* logins only (a correct password isn't blocked by someone else's typos until
   50 failures/hour), and a **global** hourly cap on AI calls so one client can't burn the free
-  Gemini/Groq quota. Stale keys are purged so memory stays bounded. *Trade-off:* per process, fine
-  for the single replica this runs as; multiple replicas would need Postgres or Redis.
-- **Client IP behind proxies:** only the right-most `X-Forwarded-For` entry is trusted (the one the
-  platform's ingress appends). The Next.js proxy reduces the header to that entry before calling
-  the backend, so behind an ingress a browser can't pick a new IP per request to dodge the per-IP
-  limits. *Limit:* with nothing in front of Next.js (local `docker compose`), Next.js keeps a
+  Gemini/Groq quota. Stale keys are purged so memory stays bounded. *Trade-off:* per process. Locally
+  that is exact; on Vercel each backend instance has its own counters (usually one instance at this
+  traffic, but a burst can start more, and a new deployment resets them). A shared store (Postgres
+  or Redis) is the fix if it matters.
+- **Client IP behind proxies:** the Next.js proxy takes the right-most `X-Forwarded-For` entry (the
+  one the platform's edge sets) and passes it to the backend in its own `x-interview-client-ip`
+  header; browsers can't set that header because the proxy only copies an allowlist. The backend
+  prefers it and otherwise falls back to the right-most `X-Forwarded-For` entry. *Found in
+  production:* on Vercel the internal call from the frontend to the private backend arrives with
+  `X-Forwarded-For` rewritten to the frontend function's own (AWS) address, so at first every
+  visitor shared one per-IP bucket (5 sign-ups an hour for the whole site). Rate-limit rejections
+  are logged (email keys masked); after the fix the logged key equals the caller's public IP and
+  spoofed headers are ignored (checked with 6 sign-ups and 21 logins carrying fake IPs). *Limit:* with nothing in front of Next.js (local `docker compose`), Next.js keeps a
   browser-supplied header and route handlers can't see the socket address, so per-IP limits are
   spoofable there (checked: 6 sign-ups with fake headers all succeeded locally). The per-user and
   global AI caps don't depend on the IP.
@@ -121,7 +130,8 @@ much slower (see Limitations in the README).
   also settles two races: an answer arriving after "Finish" (refused with 409) and "Finish" while
   an answer is being saved (409, the client finishes again). The UI disables Finish during an
   upload, too. Gemini retries stop after 60 s in total, well inside the proxy's timeout.
-- **Swagger** (`/api/docs`) can be switched off with `ENABLE_API_DOCS=false` (done in production).
+- **Swagger** (`/api/docs`) can be switched off with `ENABLE_API_DOCS=false` (done in production,
+  where the backend isn't publicly routable anyway).
 - **Audio retention:** deleted in a `finally` block right after transcription, including when
   transcription fails (tested). `KEEP_AUDIO=true` opts in to keeping it.
 
@@ -138,7 +148,7 @@ much slower (see Limitations in the README).
 
 ## Testing
 
-- **Backend (pytest, 91 tests):** auth, sessions, isolation, rate limits, audio deletion, upload
+- **Backend (pytest, 92 tests):** auth, sessions, isolation, rate limits, audio deletion, upload
   validation, clarity maths, scoring, the Gemini adapter (fake client: retries, quota, bad JSON,
   injection delimiter), both transcribers (fake model / mocked HTTP), migrations. Runs against real
   PostgreSQL. Nothing external is called: an autouse fixture makes creating a Gemini client fail.
@@ -152,7 +162,21 @@ much slower (see Limitations in the README).
 ## Hosting
 
 - The spec asked for Azure (Container Apps + Azure Database for PostgreSQL). Azure for Students
-  verification failed and a card-backed account wasn't an option, so the app is deployed on
-  **Northflank's free Sandbox**: no card, always on, 2 services + 1 PostgreSQL add-on.
-  *Considered:* Render free (services sleep, Postgres expires after 30 days), Hugging Face Docker
-  Spaces (now need a paid plan), Koyeb (reportedly needs a card), Google Cloud Run (needs a card).
+  verification failed and a card-backed account wasn't an option. Northflank's free Sandbox was
+  the next choice, but it wasn't accepting sign-ups.
+- **Deployed on Vercel (Hobby, free, no card)** with **Vercel Services**: one project, two services.
+  - `frontend`: the Next.js app, built natively by Vercel; the only public route.
+  - `backend`: the **same `backend/Dockerfile`** as `docker compose`, run on Vercel's container
+    runtime (Whisper `base.en` baked in, migrations on start). It has no public route; the frontend
+    reaches it through a service binding that injects `BACKEND_URL`, so the proxy design needed no
+    change.
+  - **PostgreSQL: Neon** (free plan), provisioned through Vercel's Neon integration, which sets
+    `DATABASE_URL` (pooled). The settings validator turns `postgresql://` into the psycopg driver
+    URL.
+- **Consequences, handled:** request bodies are capped at 4.5 MB (the recorder now records Opus at
+  32 kbit/s, ~1 MB for 4 minutes; `MAX_AUDIO_BYTES=4000000`); containers scale to zero after ~5
+  idle minutes (cold start measured in the README); several containers can start at once, so
+  Alembic takes a transaction-scoped advisory lock; per-IP limits needed the client-IP header above.
+- *Considered:* Render free (services sleep, Postgres expires after 30 days, 512 MB too small for
+  Whisper), Hugging Face Docker Spaces (now need a paid plan), Koyeb (reportedly needs a card),
+  Google Cloud Run (needs a card).
