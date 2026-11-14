@@ -1,0 +1,12 @@
+# Override for the Playwright end-to-end test: canned AI (no Gemini key, no Whisper model).
+#   docker compose -f compose.yaml -f compose.e2e.yaml up --build --wait
+services:
+  backend:
+    build:
+      args:
+        WHISPER_PRELOAD: ""
+    environment:
+      AI_MODE: mock
+      TRANSCRIBER: mock
+      GEMINI_API_KEY: ""
+      WARM_UP_TRANSCRIBER: "false"
