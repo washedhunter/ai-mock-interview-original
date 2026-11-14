@@ -20,13 +20,13 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 
 # Space-separated faster-whisper models to bake in (empty = none, e.g. for TRANSCRIBER=groq/mock).
+RUN useradd --create-home --uid 10001 app && mkdir -p /models && chown app /models
+USER app
+
 ARG WHISPER_PRELOAD="base.en"
 ENV WHISPER_DOWNLOAD_ROOT=/models HF_HUB_DISABLE_TELEMETRY=1
-RUN mkdir -p /models && if [ -n "$WHISPER_PRELOAD" ]; then interview-api download-model $WHISPER_PRELOAD; fi
+RUN if [ -n "$WHISPER_PRELOAD" ]; then interview-api download-model $WHISPER_PRELOAD; fi
 ENV HF_HUB_OFFLINE=1
-
-RUN useradd --create-home --uid 10001 app && chown -R app /models
-USER app
 
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
