@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     long_pause_seconds: float = 2.0
     ideal_wpm_low: float = 110.0
     ideal_wpm_high: float = 170.0
+
+    @field_validator("database_url")
+    @classmethod
+    def _psycopg_driver(cls, v: str) -> str:
+        """Managed Postgres add-ons hand out postgres:// or postgresql:// URLs; SQLAlchemy needs
+        the driver named (psycopg 3)."""
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix) :]
+        return v
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
